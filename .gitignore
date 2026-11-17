@@ -1,0 +1,14 @@
+
+node_modules/
+.next/
+.output/
+.wxt/
+dist/
+build/
+.vercel/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/

@@ -1,0 +1,19 @@
+
+{
+  "name": "jobfit-ai",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter @jobfit/web dev",
+    "build:web": "pnpm --filter @jobfit/web build",
+    "lint:web": "pnpm --filter @jobfit/web lint",
+    "dev:extension": "pnpm --filter @jobfit/extension dev",
+    "build:extension": "pnpm --filter @jobfit/extension build",
+    "zip:extension": "pnpm --filter @jobfit/extension zip",
+    "test": "pnpm -r --if-present test"
+  },
+  "devDependencies": {
+    "prettier": "^3",
+    "typescript": "^5"
+  }
+}
