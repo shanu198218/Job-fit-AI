@@ -30,7 +30,7 @@ export function assessEligibility(profile: CandidateProfile, job: JobDetails, re
   const noSponsorship = /\b(?:no (?:visa )?sponsorship|(?:visa )?sponsorship (?:is )?not (?:available|provided|offered)|(?:cannot|do not|don't|will not) sponsor)\b/i.test(restrictions);
 
   for (const line of lines) {
-    const allowed = line.match(/(?:must (?:be based|reside|live) in|remote (?:work )?(?:available )?(?:only in|only from)|only candidates (?:based )?in)\s+([^!;]+)/i)?.[1]
+    const allowed = line.match(/(?:must (?:be based|reside|live) in|remote (?:work )?(?:available )?(?:only in|only from)|only (?:applicants|candidates) (?:based )?(?:in|from))\s+([^!;]+)/i)?.[1]
       ?? line.match(/^\s*(?:[-*•]\s*)?(?:remote(?: work)?\s*[-–—:(,]?\s*)?([\p{L}. ,/]+?)\s+only\s*\)?$/iu)?.[1];
     if (allowed && !country) unresolved = true;
     if (allowed && country) {
@@ -63,6 +63,8 @@ export function assessEligibility(profile: CandidateProfile, job: JobDetails, re
     && !/\b(?:except|excluding|limitations?|restrictions?|not (?:fully )?remote|(?:cannot|can't|not) work from anywhere)\b/i.test(job.description);
   const incomplete = job.sourceLimited || /\b(?:show|read|see) more\b|(?:…|\.{3})\s*$/i.test(job.description);
   const onsite = /\b(?:on[- ]?site|hybrid)\b/i.test(job.workMode + '\n' + job.description);
+  const arrangementUnknown = !!job.location && !/\b(?:remote|hybrid|on[- ]?site|onsite)\b/i.test(job.workMode + '\n' + job.description);
+  if (arrangementUnknown) unresolved = true;
   if (country && !unresolved && !onsite && !incomplete && (worldwide || residenceConfirmed)) return 'ELIGIBLE';
   if (unresolved) return 'UNCERTAIN';
   if (residenceConfirmed || authorizationConfirmed) return 'POTENTIALLY_ELIGIBLE';

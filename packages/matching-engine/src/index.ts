@@ -5,6 +5,8 @@ import { extractSkills, normalizeSkill } from './skills.ts';
 
 export { extractSkills, normalizeSkill } from './skills.ts';
 
+const scoreWeights = { required: 60, preferred: 15, experience: 25, education: 20 };
+
 export function interpretLocally(job: JobDetails): Interpretation {
   const required = new Set<string>();
   const preferred = new Set<string>();
@@ -26,11 +28,11 @@ export function interpretLocally(job: JobDetails): Interpretation {
       for (const skill of extractSkills(text)) (priority === 'preferred' ? preferred : required).add(skill);
     }
     if (section === 'duties' && text && duties.length < 12) duties.push(text.slice(0, 350));
-    const experience = text.match(/\b(\d{1,2})(?:\s*[â€“-]\s*\d{1,2})?\s*\+?\s+years?\b/i);
+    const experience = text.match(/\b(\d{1,2})(?:\s*[-\u2013\u2014]\s*\d{1,2})?\s*\+?\s+years?\b/i);
     if (experience && priority !== 'preferred' && /experience|professional/i.test(text)) {
       years = Math.max(years ?? 0, Number(experience[1]));
     }
-    if (!education && /\b(degree|bachelor|master|phd|diploma)\b/i.test(text)) education = text.slice(0, 350);
+    if (!education && /\b(degree|bachelor|bsc|b\.s\.|beng|btech|master|msc|phd|diploma)\b/i.test(text)) education = text.slice(0, 350);
     if (/\b(visa|sponsor(?:ship|ed)?|work authori[sz]ation|right to work|eligible to work|authori[sz]ed to work|based in|reside in|must live in|excluding|cannot hire|not eligible|only candidates|remote.{0,30}only)\b/i.test(text)) quoted.push(text);
     if (!sponsorship && /\b(visa|sponsor(?:ship|ed)?)\b/i.test(text)) sponsorship = text.slice(0, 350);
   }
@@ -41,10 +43,40 @@ export function interpretLocally(job: JobDetails): Interpretation {
   };
 }
 
+function statusValue(status: string): number | null {
+  return status === 'Matched' ? 1 : status === 'Partially Matched' ? 0.5 : status === 'Not Evidenced' ? 0 : null;
+}
+
+function coverageRate(items: { status: string }[]) {
+  const values = items.map(item => statusValue(item.status)).filter((value): value is number => value !== null);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+function weightedScore(dimensions: { value: number | null; weight: number }[]) {
+  const known = dimensions.filter((item): item is { value: number; weight: number } => item.value !== null);
+  const weight = known.reduce((sum, item) => sum + item.weight, 0);
+  return weight ? Math.round(100 * known.reduce((sum, item) => sum + item.value * item.weight, 0) / weight) : null;
+}
+
+function scoreableRequirements<T extends { text: string }>(items: T[]) {
+  const labels = new Set(items.map(item => normalizeSkill(item.text)));
+  const related: Record<string, string[]> = {
+    'SQL databases': ['MySQL', 'PostgreSQL', 'SQL Server', 'SQL'],
+    'NoSQL databases': ['MongoDB'],
+    SQL: ['SQL Server'],
+    '.NET': ['.NET Core'],
+  };
+  return items.filter(item => {
+    const label = normalizeSkill(item.text);
+    return !Object.entries(related).some(([parent, children]) => label === parent && children.some(child => labels.has(child)));
+  });
+}
+
 function educationMatch(requirement: string, evidence: string[]) {
   if (!requirement) return 'No explicit education requirement found.';
   if (!evidence.length) return 'Education evidence unavailable. Vacancy: ' + requirement;
-  const levels = [/\b(diploma|associate)\b/i, /\b(bachelor|bsc|b\.s\.)\b/i, /\b(master|msc|m\.s\.)\b/i, /\b(phd|doctorate)\b/i];
+  const levels = [/\b(diploma|associate)\b/i, /\b(bachelor|bsc|b\.s\.|beng|btech)\b/i,
+    /\b(master|msc|m\.s\.|meng|mtech)\b/i, /\b(phd|doctorate)\b/i];
   const requiredLevel = levels.findIndex(pattern => pattern.test(requirement));
   const hasLevel = requiredLevel >= 0 && levels.slice(requiredLevel).some(pattern => evidence.some(line => pattern.test(line)));
   return (hasLevel ? 'Degree level supported. Check any field or equivalency requirements. ' : 'Review education requirement against the CV evidence. ')
@@ -56,41 +88,38 @@ export function matchJob(profile: CandidateProfile, job: JobDetails, interpretat
   const eligibilityStatus = assessEligibility(profile, job, job.description);
   const vacancy = buildVacancyReport(profile, job, eligibilityStatus, interpretation.vacancyItems);
   const skills = new Set(profile.skills.map(normalizeSkill));
-  const matched = new Set(vacancy.requirements.filter(item => item.category === 'Technical' && item.status === 'Matched')
-    .map(item => normalizeSkill(item.text)));
-  const direct = (skill: string) => matched.has(skill) || (!profile.evidence.length && skills.has(skill));
   const comparable = vacancy.requirements.filter(item => item.category === 'Technical' && isSkillLabel(item.text));
-  const required = [...new Set(comparable.filter(item => item.priority === 'Required').map(item => normalizeSkill(item.text)))];
-  const preferred = [...new Set(comparable.filter(item => item.priority === 'Preferred').map(item => normalizeSkill(item.text)))]
-    .filter(skill => !required.includes(skill));
-  const requiredMatched = required.filter(direct);
-  const requiredMissing = required.filter(skill => !direct(skill));
-  const preferredMatched = preferred.filter(direct);
-  const hasEvidence = skills.size > 0 || requiredMatched.length + preferredMatched.length > 0;
-  const requiredRate = required.length && hasEvidence ? requiredMatched.length / required.length : null;
-  const preferredRate = preferred.length && hasEvidence ? preferredMatched.length / preferred.length : null;
-  const dimensions: { value: number; weight: number }[] = [];
-  if (requiredRate !== null) dimensions.push({ value: requiredRate, weight: 60 });
-  if (preferredRate !== null) dimensions.push({ value: preferredRate, weight: 15 });
-  const average = () => dimensions.length
-    ? Math.round(100 * dimensions.reduce((sum, item) => sum + item.value * item.weight, 0)
-      / dimensions.reduce((sum, item) => sum + item.weight, 0)) : null;
-  const technicalScore = average();
+  const required = comparable.filter(item => item.priority === 'Required');
+  const preferred = comparable.filter(item => item.priority === 'Preferred')
+    .filter(item => !required.some(requiredItem => requiredItem.id === item.id));
+  const hasEvidence = profile.skills.length > 0
+    || comparable.some(item => item.status === 'Matched' || item.status === 'Partially Matched');
+  const requiredRate = hasEvidence ? coverageRate(scoreableRequirements(required)) : null;
+  const preferredRate = hasEvidence ? coverageRate(scoreableRequirements(preferred)) : null;
+  const technicalScore = weightedScore([
+    { value: requiredRate, weight: scoreWeights.required },
+    { value: preferredRate, weight: scoreWeights.preferred },
+  ]);
+  const requiredMatched = required.filter(item => item.status === 'Matched').map(item => normalizeSkill(item.text));
+  const requiredMissing = hasEvidence
+    ? required.filter(item => item.status !== 'Matched').map(item => normalizeSkill(item.text)) : [];
+  const preferredMatched = preferred.filter(item => item.status === 'Matched').map(item => normalizeSkill(item.text));
   const minimumYears = minimumGeneralExperience(vacancy.requirements);
-  const experience = profile.experienceYears === null || minimumYears === null ? null
-    : minimumYears === 0 ? 1 : Math.min(1, profile.experienceYears / minimumYears);
-  if (experience !== null) dimensions.push({ value: experience, weight: 25 });
+  const experienceRequirements = vacancy.requirements.filter(item => item.category === 'Experience' && item.priority !== 'Preferred');
+  const experience = profile.experienceYears !== null && minimumYears !== null
+    ? Math.min(1, profile.experienceYears / minimumYears) : coverageRate(experienceRequirements);
   const qualifications = vacancy.requirements.filter(item => item.category === 'Education'
-    && item.priority === 'Required' && item.status !== 'Unknown');
-  if (qualifications.length) dimensions.push({
-    value: qualifications.reduce((sum, item) => sum + (item.status === 'Matched' ? 1 : item.status === 'Partially Matched' ? 0.5 : 0), 0)
-      / qualifications.length,
-    weight: 20,
-  });
-  const overallScore = average();
+    && item.priority === 'Required');
+  const educationRate = coverageRate(qualifications);
+  const overallScore = weightedScore([
+    { value: requiredRate, weight: scoreWeights.required },
+    { value: preferredRate, weight: scoreWeights.preferred },
+    { value: experience, weight: scoreWeights.experience },
+    { value: educationRate, weight: scoreWeights.education },
+  ]);
   const critical = vacancy.requirements.find(item => item.priority === 'Required'
     && item.category !== 'Responsibilities' && item.status !== 'Matched');
-  const educationEvidence = profile.evidence.filter(line => /\b(degree|bachelor|master|phd|diploma|bsc|msc)\b/i.test(line));
+  const educationEvidence = profile.evidence.filter(line => /\b(degree|bachelor|master|phd|diploma|bsc|msc|beng|btech)\b/i.test(line));
   return {
     overallScore, technicalScore, experienceScore: experience === null ? null : Math.round(100 * experience),
     vacancy,
@@ -106,7 +135,7 @@ export function matchJob(profile: CandidateProfile, job: JobDetails, interpretat
           ? 'This vacancy looks worth considering based on the evidence available.'
           : 'Review the qualifications before deciding whether to apply.')
         + (critical ? ' Check your evidence for the outstanding required qualifications.' : overallScore === null ? ' There is too little CV evidence to judge the match.' : ''),
-    requiredMatched, requiredMissing: hasEvidence ? requiredMissing : [], preferredMatched,
+    requiredMatched, requiredMissing, preferredMatched,
     education: educationMatch(interpretation.education, educationEvidence),
     responsibilities: interpretation.responsibilities,
     transferable: interpretation.transferable.filter(item => profile.evidence.some(line => line.includes(item.evidence))),

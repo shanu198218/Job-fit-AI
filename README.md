@@ -7,3 +7,7 @@ A personal Chrome extension that compares job vacancies with your CV. It parses 
 - **Shared engines** · Deterministic scoring and conservative eligibility assessment.
 
 Follow the [Windows setup guide](docs/local-setup.md) for installation, pairing, scoring rules, privacy, and verification.
+
+## Windows daily use
+
+After setup, double-click [`Start-JobFit-AI.bat`](Start-JobFit-AI.bat) and wait for the Local API to be ready. Double-click [`Pair-JobFit-AI.bat`](Pair-JobFit-AI.bat) when AI Settings reports **Unpaired**; pairing is not needed every time the API starts. Keep the API console open while using JobFit AI. See the [Windows setup guide](docs/local-setup.md#daily-pairing-workflow) for extension ID configuration and the pairing steps.

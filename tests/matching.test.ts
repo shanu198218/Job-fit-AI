@@ -75,6 +75,97 @@ test('validates manual jobs and calculates weighted local matches', () => {
   assert.deepEqual(result.preferredMatched, ['JavaScript']);
 });
 
+test('matches degree abbreviations and explicit experience ranges without inventing evidence', () => {
+  const profile = extractProfile([
+    'BSc (Hons) in Information Technology',
+    '3+ years of software engineering experience',
+    'Full-stack software engineer',
+  ].join('\n'));
+  const result = matchJob(profile, manualJob("Requirements\nBachelor's degree in IT\n3–5 years full-stack experience"));
+  assert.ok(profile.evidence.includes('BSc (Hons) in Information Technology'));
+  assert.equal(profile.experienceYears, 3);
+  assert.equal(result.vacancy.requirements.find(item => item.category === 'Education')?.status, 'Matched');
+  assert.equal(result.vacancy.requirements.find(item => item.category === 'Experience')?.status, 'Matched');
+  assert.equal(result.experienceScore, 100);
+
+  const missingYears = extractProfile('BSc in Information Technology\nWorked as a software developer');
+  const unknown = matchJob(missingYears, manualJob('Requirements\n5 years professional experience'));
+  assert.equal(missingYears.experienceYears, null);
+  assert.equal(unknown.vacancy.requirements.find(item => item.category === 'Experience')?.status, 'Unknown');
+  assert.equal(unknown.experienceScore, null);
+
+  const employmentOnly = extractProfile('Software Engineer at Example\nBuilt full-stack products');
+  const partial = matchJob(employmentOnly, manualJob('Requirements\n3–5 years software engineering experience'));
+  assert.equal(partial.experienceScore, 50);
+  assert.equal(partial.vacancy.requirements.find(item => item.category === 'Experience')?.status, 'Partially Matched');
+});
+
+test('normalizes database families without equating individual database products', () => {
+  const mongo = extractProfile('Built services using MongoDB');
+  const mysql = extractProfile('Developed applications using MySQL and PostgreSQL');
+  const mongoResult = matchJob(mongo, manualJob('Requirements\nNoSQL databases'));
+  const sqlResult = matchJob(mysql, manualJob('Requirements\nSQL databases'));
+  assert.equal(mongoResult.vacancy.requirements[0]?.status, 'Matched');
+  assert.equal(sqlResult.vacancy.requirements[0]?.status, 'Matched');
+
+  const serverOnly = extractProfile('Developed applications using SQL Server');
+  const postgresRequired = matchJob(serverOnly, manualJob('Requirements\nPostgreSQL'));
+  assert.equal(postgresRequired.vacancy.requirements[0]?.status, 'Not Evidenced');
+
+  const generalDotnet = extractProfile('C#/.NET experience');
+  const coreRequired = matchJob(generalDotnet, manualJob('Requirements\n.NET Core'));
+  assert.equal(coreRequired.vacancy.requirements[0]?.status, 'Partially Matched');
+});
+
+test('scores compound technical requirements independently and gives partial evidence credit', () => {
+  const profile = extractProfile('C#/.NET Core experience');
+  const result = matchJob(profile, manualJob('Requirements\nAngular + .NET Core'));
+  const angular = result.vacancy.requirements.find(item => item.text === 'Angular');
+  const dotnet = result.vacancy.requirements.find(item => item.text === '.NET Core');
+  assert.equal(angular?.status, 'Not Evidenced');
+  assert.equal(dotnet?.status, 'Matched');
+  assert.equal(result.technicalScore, 50);
+  assert.deepEqual(result.requiredMatched, ['.NET Core']);
+  assert.deepEqual(result.requiredMissing, ['Angular']);
+  assert.equal(normalizeSkill('React.js'), 'React');
+  assert.equal(normalizeSkill('Next.js'), 'Next.js');
+});
+
+test('regresses the Senior .NET example to nonzero evidence-based scores', () => {
+  const profile = extractProfile([
+    'BSc (Hons) in Information Technology',
+    '3+ years of software engineering experience',
+    'Full-stack software engineer',
+    'React, Next.js, TypeScript, JavaScript',
+    'C#/.NET Core experience',
+    'PostgreSQL and MySQL',
+    'MongoDB',
+  ].join('\n'));
+  const result = matchJob(profile, manualJob([
+    'Requirements',
+    "Bachelor's degree in Information Technology",
+    '3–5 years of full-stack experience',
+    'Angular + .NET Core',
+    'SQL Server/MySQL',
+    'NoSQL databases',
+  ].join('\n')));
+  assert.equal(result.technicalScore, 60);
+  assert.equal(result.overallScore, 77);
+  assert.equal(result.vacancy.requirements.find(item => item.category === 'Education')?.status, 'Matched');
+  assert.equal(result.vacancy.requirements.find(item => item.category === 'Experience')?.status, 'Matched');
+  assert.equal(result.vacancy.requirements.find(item => item.text === 'Angular')?.status, 'Not Evidenced');
+  assert.equal(result.vacancy.requirements.find(item => item.text === '.NET Core')?.status, 'Matched');
+  assert.equal(result.vacancy.requirements.find(item => item.text === 'SQL Server')?.status, 'Not Evidenced');
+  assert.equal(result.vacancy.requirements.find(item => item.text === 'MySQL')?.status, 'Matched');
+  assert.equal(result.vacancy.requirements.find(item => item.text === 'NoSQL databases')?.status, 'Matched');
+});
+
+test('does not count a general database requirement twice with its specific product', () => {
+  const profile = extractProfile('MySQL and React');
+  const result = matchJob(profile, manualJob('Requirements\nSQL databases\nMySQL\nReact\nAngular'));
+  assert.equal(result.technicalScore, 67);
+});
+
 test('overall CV match includes required qualifications without changing the technical score', () => {
   const vacancy = manualJob('Requirements\nReact\nBachelor of Physics');
   const supported = matchJob({ ...candidate, evidence: ['Built React apps', 'Bachelor of Physics'] }, vacancy);
@@ -86,6 +177,7 @@ test('overall CV match includes required qualifications without changing the tec
   const empty = matchJob({ ...candidate, skills: [], evidence: [] }, vacancy);
   assert.equal(empty.overallScore, null);
   assert.equal(empty.technicalScore, null);
+  assert.equal(empty.vacancy.requirements.find(item => item.category === 'Technical')?.status, 'Unknown');
 });
 
 test('local extraction preserves work mode, exact hours, and distinct employment conditions', () => {
@@ -169,6 +261,19 @@ test('Sri Lanka eligibility distinguishes explicit restrictions from unresolved 
   assert.equal(status('Remote worldwide. Read more…'), 'Needs Verification');
   assert.equal(matchJob({ ...profile, authorizedCountries: ['Sri Lanka'] },
     manualJob('Must be authorized to work in Canada without sponsorship.')).vacancy.eligibility.status, 'Not Eligible');
+});
+
+test('Sri Lanka residence matching is separate from missing residence and unknown work arrangement', () => {
+  const job = { ...manualJob('Only candidates in Sri Lanka.'), location: 'Colombo, Sri Lanka' };
+  const missingResidence = matchJob({ ...candidate, country: '' }, job);
+  assert.equal(missingResidence.vacancy.eligibility.status, 'Needs Verification');
+  assert.match(missingResidence.vacancy.eligibility.questions[0] ?? '', /What country are you currently residing in/);
+  assert.doesNotMatch(missingResidence.vacancy.eligibility.questions[0] ?? '', /Sri Lanka/);
+
+  const confirmedResidence = matchJob({ ...candidate, country: 'Sri Lanka' }, job);
+  assert.equal(confirmedResidence.vacancy.eligibility.status, 'Needs Verification');
+  assert.match(confirmedResidence.vacancy.eligibility.explanation, /residence matches/i);
+  assert.match(confirmedResidence.vacancy.eligibility.questions[0] ?? '', /matches the stated country restriction/i);
 });
 
 

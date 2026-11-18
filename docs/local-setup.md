@@ -27,7 +27,27 @@ The backend listens on `http://127.0.0.1:8787`. The default model is `gemini-3.1
 
 For a compiled backend, run `pnpm.cmd build:api`, set the same variables, and run `pnpm.cmd --filter @jobfit/local-api start`.
 
-In a second PowerShell window, run `pnpm.cmd pair`. The command copies the token to the Windows clipboard. In the popup, open **AI Settings**, paste the pairing token, and select **Pair extension**. Clear the clipboard afterward with `Set-Clipboard -Value ' '`. If Windows clipboard history is enabled, remove the token from history as well. Repeat pairing after Chrome restarts or the extension reloads.
+### Double-click launcher
+
+After installing dependencies and loading the extension as described above, copy its 32-character ID from `chrome://extensions`. Create a plain-text file named `.jobfit-extension-id` in the project root and put only that ID on its first line. This ID is not a credential; the file is git-ignored. The launcher prefers an already-set `JOBFIT_EXTENSION_ID` environment variable and uses this file only when the variable is unset.
+
+Double-click `Start-JobFit-AI.bat` or create a desktop shortcut to it. The launcher checks Node.js, pnpm, the required project files and installed API dependencies, validates the extension ID, and checks whether port 8787 can be bound. It does not install dependencies, build the extension, or stop another process. It runs the existing root `dev:api` script, which delegates to pnpm's Local API script and its attached Node `--watch` server; the launcher starts no detached process or service. Keep its console open while using the API and press Ctrl+C to interrupt the attached process chain and release the API listener.
+
+To create the requested shortcut, right-click `Start-JobFit-AI.bat`, choose **Show more options** (if shown) → **Send to** → **Desktop (create shortcut)**, then rename the desktop shortcut to **Start JobFit AI**. Alternatively, create a shortcut manually and set its target to the full path of `Start-JobFit-AI.bat`; Windows permits spaces in the path.
+
+On a port conflict, the launcher leaves the other process untouched. Use `netstat -ano | findstr :8787` in Command Prompt and inspect the reported PID in Task Manager before deciding what to do. If dependencies are missing, install them once from the project directory with `pnpm.cmd install --frozen-lockfile`.
+
+### Daily pairing workflow
+
+1. Double-click `Start-JobFit-AI.bat` and wait for the message that the Local API is listening.
+2. When pairing is required, double-click `Pair-JobFit-AI.bat`. It validates the extension ID using the same environment-variable-first, `.jobfit-extension-id` fallback as the startup launcher, then runs the existing `pnpm.cmd pair` command. It does not start another API server, install dependencies, or build the extension.
+3. The existing pairing command copies the token to the Windows clipboard; it does not print the token. In Chrome, open **JobFit AI** → **AI Settings**, paste the pairing token, and select **Pair extension**.
+4. Clear the clipboard afterward with `Set-Clipboard -Value ' '`. If Windows clipboard history is enabled, remove the token from history as well.
+5. Keep the Local API console open while using server-dependent features.
+
+Pair only when the existing authentication flow requires it (for example, after Chrome restarts or the extension reloads and AI Settings reports **Unpaired**); starting the API by itself does not require pairing again. The launcher leaves the token handling to the existing DPAPI-protected pairing command and does not write a token file.
+
+To create a desktop shortcut, right-click `Pair-JobFit-AI.bat`, choose **Show more options** (if shown) → **Send to** → **Desktop (create shortcut)**, then rename it **Pair JobFit AI**. Alternatively, create a shortcut manually and set its target to the full path of `Pair-JobFit-AI.bat`; Windows permits spaces in the path.
 
 To rotate the pairing token, stop the backend with Ctrl+C, run `pnpm.cmd pair --rotate`, restart the backend, and pair again. The backend reads its pairing credential at startup.
 

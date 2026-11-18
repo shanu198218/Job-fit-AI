@@ -25,10 +25,10 @@ const classified: [Category, RegExp][] = [
   ['Candidate conditions', /\b(?:travel|background check|security clearance|driving licen[sc]e)\b/i],
   ['Work arrangement', /^(?:work arrangement|work mode|remote|hybrid|on[- ]?site)\b|\b(?:fully remote|(?:remote|hybrid|on[- ]?site) (?:position|role|schedule|attendance|work(?:ing)?)|work from anywhere)\b/i],
   ['Location', /^(?:job )?location\s*:/i],
-  ['Education', /\b(?:degree|bachelor|master[’']?s|phd|doctorate|diploma|certifi\w+|professional qualification)\b/i],
+  ['Education', /\b(?:degree|bachelor|b\.?sc|beng|btech|master[’']?s|msc|phd|doctorate|diploma|certifi\w+|professional qualification)\b/i],
   ['Languages', /\b(?:english|fluency in|fluent in|language requirement)\b/i],
   ['Soft skills', /\b(?:communication|teamwork|problem.solving|leadership|interpersonal|attention to detail)\b/i],
-  ['Experience', /\b(?:seniority|years? (?:of )?(?:\w+ ){0,5}experience|professional experience|industry experience|leadership experience)\b/i],
+  ['Experience', /\b(?:seniority|years? (?:of )?(?:[\p{L}\p{N}+#./-]+ ){0,5}experience|professional experience|industry experience|leadership experience)\b/iu],
   ['Responsibilities', /^(?:build|design|develop|deliver|own|maintain|collaborate|support|lead|implement|manage|monitor|review|mentor|ensure)\b/i],
 ];
 const headings: [RegExp, Category, VacancyItem['priority']][] = [
@@ -48,8 +48,8 @@ const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
 const key = (value: string) => normalized(value).toLowerCase().replace(/[.!]+$/, '');
 const mandatory = /\b(?:required|must|minimum|essential|mandatory)\b/i;
 const preferred = /\b(?:preferred|nice.to.have|desirable|a plus|advantageous|bonus points)\b/i;
-const years = /\b(\d{1,2})(?:\s*[-–—]\s*\d{1,2})?\s*\+?\s*years?\b/i;
-const genericExperience = /^(?:(?:minimum(?: of)?|at least|required|preferred)[: ]+)?\d{1,2}(?:\s*[-–—]\s*\d{1,2})?\s*\+?\s*years?\s+(?:of\s+)?(?:(?:relevant|professional|commercial|work)\s+){0,2}experience(?:\s+required)?[.!]?$/i;
+const years = /\b(\d{1,2})(?:\s*[-\u2013\u2014]\s*\d{1,2})?\s*\+?\s*years?\b/i;
+const genericExperience = /^(?:(?:minimum(?: of)?|at least|required|preferred)[: ]+)?\d{1,2}(?:\s*[-\u2013\u2014]\s*\d{1,2})?\s*\+?\s*years?\b(?:\s+(?:of\s+)?[\p{L}\p{N}+#./-]+){0,6}\s+experience(?:\s+required)?[.!]?$/iu;
 export const isSkillLabel = (text: string) => text.length <= 80 && /^[\p{L}\p{N}.+#/-]+(?: [\p{L}\p{N}.+#/-]+){0,2}$/u.test(text)
   && !/\b(?:or|with|without|either|and|no|not|of|required|preferred|experience|familiarity|minimum|knowledge)\b/i.test(text);
 
@@ -88,8 +88,8 @@ export function extractVacancy(job: JobDetails) {
       const technical = category === 'Technical'
         && !/\b(?:or|either|equivalent|without|no|not)\b/i.test(text)
         && text.replace(/[.!]$/, '').replace(/^(?:experience (?:with|in)|proficiency in|knowledge of|required:)\s+/i, '').replace(/\s+(?:required|preferred)$/i, '');
-      const parts = technical ? technical.split(/\s*,\s*|\s+and\s+/i) : [];
-      const labels = parts.length && parts.every(isSkillLabel) ? parts : [text];
+      const parts = technical ? technical.split(/\s*,\s*|\s+and\s+|\s*[+&]\s*|\s*\/\s*/i) : [];
+      const labels = parts.length > 1 && parts.every(isSkillLabel) ? parts : [text];
       for (const label of labels) items.push({ category, text: label, evidence: source, priority });
     }
   }
@@ -109,16 +109,38 @@ function compare(item: VacancyItem, profile: CandidateProfile): Omit<Requirement
   }
   const negative = /\b(?:no|not|never|lack(?:ing)?|learning|interested in|unfamiliar|aspiring)\b/i;
   const eligibleEvidence = profile.evidence.filter(line => !negative.test(line));
+  if (item.category === 'Education') {
+    const levelPatterns = [
+      /\b(?:diploma|associate)\b/i,
+      /\b(?:bachelor(?:'s)?|bsc|b\.s\.|b\.sc\.|beng|b\.eng\.|btech|b\.tech\.)\b/i,
+      /\b(?:master(?:'s)?|msc|m\.s\.|m\.sc\.|meng|m\.eng\.|mtech|m\.tech\.)\b/i,
+      /\b(?:phd|doctorate)\b/i,
+    ];
+    const requiredLevel = levelPatterns.findIndex(pattern => pattern.test(item.text));
+    const requiredField = educationField(item.text);
+    const matched = eligibleEvidence.filter(line => {
+      const candidateLevel = levelPatterns.findIndex(pattern => pattern.test(line));
+      const candidateField = educationField(line);
+      return requiredLevel >= 0 && candidateLevel >= requiredLevel
+        && (!requiredField || candidateField === requiredField);
+    });
+    if (matched.length) return { status: 'Matched', candidateEvidence: matched, basis: 'Explicit',
+      explanation: 'The CV explicitly supports the required degree level and field.', gap: '' };
+  }
   const exact = eligibleEvidence.filter(line => containsTerm(line, item.text.replace(/[.!]$/, '')));
   const skills = item.category === 'Technical' ? extractSkills(item.text) : [];
-  const alias = skills.length === 1 && normalizeSkill(item.text) === skills[0] ? skills[0] : undefined;
-  const direct = alias ? eligibleEvidence.filter(line => extractSkills(line).includes(alias)) : exact;
+  const canonicalItem = normalizeSkill(item.text);
+  const alias = skills.includes(canonicalItem) ? canonicalItem : undefined;
+  const direct = alias ? eligibleEvidence.filter(line => extractSkills(line)
+    .some(skill => skillEvidenceSupports(alias, skill))) : exact;
   if (direct.length && !negative.test(item.text)) {
     return { status: 'Matched', candidateEvidence: direct, basis: 'Explicit',
       explanation: 'The CV explicitly mentions this requirement.', gap: '' };
   }
   const related = eligibleEvidence.filter(line => skills.some(skill => extractSkills(line).includes(skill))
     || (item.category === 'Education' && /\b(?:degree|bachelor|master|diploma|certified|phd)\b/i.test(line))
+    || (item.category === 'Education' && /\b(?:bsc|b\.s\.|b\.sc\.|beng|b\.eng\.|btech|b\.tech\.)\b/i.test(line))
+    || (item.category === 'Experience' && hasRelevantExperienceEvidence(item.text, line))
     || (item.category === 'Technical' && /^(?:docker|podman)$/i.test(item.text)
       && /\b(?:docker|podman|(?:built|published) container images)\b/i.test(line)));
   if (related.length && !negative.test(item.text)) {
@@ -131,6 +153,27 @@ function compare(item: VacancyItem, profile: CandidateProfile): Omit<Requirement
   return { basis: 'None', candidateEvidence: [], status: unknown ? 'Unknown' : 'Not Evidenced',
     explanation: unknown ? 'The available details do not establish this condition.' : 'No direct supporting evidence was found in the extracted CV.',
     gap: 'Confirm this requirement and add evidence where accurate.' };
+}
+
+function educationField(text: string) {
+  if (/\b(?:information technology|information systems|IT)\b/i.test(text)) return 'information technology';
+  if (/\bcomputer science\b/i.test(text)) return 'computer science';
+  if (/\bsoftware engineering\b/i.test(text)) return 'software engineering';
+  if (/\bsoftware development\b/i.test(text)) return 'software engineering';
+  return '';
+}
+
+function skillEvidenceSupports(required: string, candidate: string) {
+  if (required === candidate) return true;
+  if (required === 'NoSQL databases') return candidate === 'MongoDB';
+  if (required === 'SQL databases') return ['MySQL', 'PostgreSQL', 'SQL Server', 'SQL'].includes(candidate);
+  return false;
+}
+
+function hasRelevantExperienceEvidence(requirement: string, evidence: string) {
+    const scope = requirement.replace(/^\s*\d{1,2}(?:\s*[-\u2013\u2014]\s*\d{1,2})?\s*\+?\s*years?\s+(?:of\s+)?/i, '')
+      .replace(/\b(?:of|experience|professional|commercial|relevant|work)\b/gi, '');
+    return scope.split(/\s+/).some(term => term.length > 3 && containsTerm(evidence, term));
 }
 
 export function buildVacancyReport(profile: CandidateProfile, job: JobDetails, eligibility: EligibilityStatus, aiItems?: VacancyItem[]): VacancyReport {
@@ -157,12 +200,21 @@ export function buildVacancyReport(profile: CandidateProfile, job: JobDetails, e
   }
   const status = eligibility === 'ELIGIBLE' ? 'Eligible' : eligibility === 'NOT_ELIGIBLE' ? 'Not Eligible' : 'Needs Verification';
   const questions: string[] = [];
+  const countryConditionConfirmed = Boolean(profile.country && information.some(item =>
+    item.category === 'Geography' && item.text.toLowerCase().includes(profile.country.toLowerCase())));
+  const arrangementText = [job.workMode, ...information.filter(item => item.category === 'Work arrangement').map(item => item.text)].join('\n');
+  const arrangementNeedsConfirmation = information.some(item => item.category === 'Timezone' || item.category === 'Relocation')
+    || /\b(?:hybrid|on[- ]?site|onsite)\b/i.test(arrangementText)
+    || !!job.location && !/\b(?:remote|hybrid|on[- ]?site|onsite)\b/i.test(arrangementText);
   if (status === 'Needs Verification') {
-    questions.push('Can the employer hire someone residing in ' + (profile.country || 'Sri Lanka') + ' for this role?');
-    if (!profile.authorizedCountries.length || information.some(item => item.category === 'Work authorization' || item.category === 'Sponsorship')) {
+    questions.push(!profile.country ? 'What country are you currently residing in?'
+      : countryConditionConfirmed
+        ? 'Your recorded residence matches the stated country restriction. Confirm the work arrangement and any other unresolved conditions.'
+        : 'Can the employer hire someone residing in ' + profile.country + ' for this role?');
+    if (information.some(item => item.category === 'Work authorization' || item.category === 'Sponsorship')) {
       questions.push('What work authorization or visa sponsorship applies at the start date?');
     }
-    if (information.some(item => item.category === 'Timezone' || item.category === 'Relocation' || item.category === 'Work arrangement')) {
+    if (arrangementNeedsConfirmation) {
       questions.push('Which working hours, onsite attendance or relocation conditions apply?');
     }
   }
@@ -178,7 +230,10 @@ export function buildVacancyReport(profile: CandidateProfile, job: JobDetails, e
     eligibility: { status, questions, explanation: status === 'Eligible'
       ? 'The vacancy explicitly supports your recorded location and the applicable conditions identified.'
       : status === 'Not Eligible' ? 'An explicit hiring restriction conflicts with your recorded circumstances.'
-        : 'The vacancy or CV profile leaves one or more hiring conditions unresolved.' },
+        : !profile.country ? 'Candidate country of residence is not recorded; verify residence and any other hiring conditions.'
+          : countryConditionConfirmed
+            ? 'Your recorded residence matches the stated country restriction, but the work arrangement or another hiring condition remains unresolved.'
+            : 'The vacancy or CV profile leaves one or more hiring conditions unresolved.' },
   };
 }
 
