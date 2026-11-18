@@ -181,9 +181,7 @@ All results are advisory. Candidates should review the cited evidence and confir
 - Designed primarily for Windows and Chrome.
 - Gemini support requires network access and a valid API key.
 - Text must be readable for PDF or DOCX parsing.
-- Restricted pages may require manual vacancy input.
-- Local matching uses a finite skill catalog and heuristic section parsing.
-- Visa, sponsorship, and work-authorization recommendations are not legal determinations.
+
 
 ## Documentation
 
