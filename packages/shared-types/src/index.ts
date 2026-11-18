@@ -1,39 +1,49 @@
-
 export type EligibilityStatus =
-  | "ELIGIBLE"
-  | "POTENTIALLY_ELIGIBLE"
-  | "UNCERTAIN"
-  | "NOT_ELIGIBLE"
-  | "INSUFFICIENT_INFORMATION";
-
-export type MatchLevel =
-  | "STRONG"
-  | "GOOD"
-  | "PARTIAL"
-  | "GAP"
-  | "UNKNOWN";
+  | 'ELIGIBLE' | 'POTENTIALLY_ELIGIBLE' | 'UNCERTAIN'
+  | 'NOT_ELIGIBLE' | 'INSUFFICIENT_INFORMATION';
 
 export interface CandidateProfile {
-  id: string;
-  fullName: string;
   country: string;
-  experienceYears: number;
+  authorizedCountries: string[];
+  experienceYears: number | null;
   skills: string[];
+  evidence: string[];
 }
 
 export interface JobDetails {
-  id?: string;
   title: string;
   company: string;
   location: string;
+  workMode: string;
+  employmentType: string;
   description: string;
   applicationUrl: string;
 }
 
+export interface Interpretation {
+  required: string[];
+  preferred: string[];
+  years: number | null;
+  education: string;
+  restrictions: string;
+  sponsorship: string;
+  responsibilities: string[];
+  transferable: { skill: string; evidence: string }[];
+  improvements: string[];
+}
+
 export interface JobMatchResult {
-  overallScore: number;
-  technicalScore: number;
-  experienceScore: number;
+  overallScore: number | null;
+  technicalScore: number | null;
+  experienceScore: number | null;
+  education: string;
   eligibilityStatus: EligibilityStatus;
   recommendation: string;
+  requiredMatched: string[];
+  requiredMissing: string[];
+  preferredMatched: string[];
+  responsibilities: string[];
+  transferable: Interpretation['transferable'];
+  evidence: string[];
+  improvements: string[];
 }

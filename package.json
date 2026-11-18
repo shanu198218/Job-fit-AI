@@ -1,19 +1,28 @@
-
 {
   "name": "jobfit-ai",
-  "version": "1.0.0",
   "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
-    "dev:web": "pnpm --filter @jobfit/web dev",
-    "build:web": "pnpm --filter @jobfit/web build",
-    "lint:web": "pnpm --filter @jobfit/web lint",
     "dev:extension": "pnpm --filter @jobfit/extension dev",
     "build:extension": "pnpm --filter @jobfit/extension build",
     "zip:extension": "pnpm --filter @jobfit/extension zip",
-    "test": "pnpm -r --if-present test"
+    "dev:api": "pnpm --filter @jobfit/local-api dev",
+    "build:api": "pnpm --filter @jobfit/local-api build",
+    "pair": "pnpm --filter @jobfit/local-api pair",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "eslint apps/extension apps/local-api packages tests",
+    "test:browser": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/browser.test.mts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.ts"
   },
   "devDependencies": {
-    "prettier": "^3",
-    "typescript": "^5"
+    "eslint": "^9.39.4",
+    "jsdom": "^31.0.1",
+    "playwright": "^1.65.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.2"
   }
 }

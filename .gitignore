@@ -12,3 +12,6 @@ build/
 *.log
 .DS_Store
 coverage/
+
+/.jobfit-extension-git-backup/
+/.jobfit-web-backup/
