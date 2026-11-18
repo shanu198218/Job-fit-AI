@@ -1,3 +1,5 @@
+import type { VacancyItem, VacancyReport } from './vacancy.ts';
+
 export type EligibilityStatus =
   | 'ELIGIBLE' | 'POTENTIALLY_ELIGIBLE' | 'UNCERTAIN'
   | 'NOT_ELIGIBLE' | 'INSUFFICIENT_INFORMATION';
@@ -8,6 +10,7 @@ export interface CandidateProfile {
   experienceYears: number | null;
   skills: string[];
   evidence: string[];
+  experienceSource?: 'CV' | 'Self-reported';
 }
 
 export interface JobDetails {
@@ -18,6 +21,7 @@ export interface JobDetails {
   employmentType: string;
   description: string;
   applicationUrl: string;
+  sourceLimited?: boolean;
 }
 
 export interface Interpretation {
@@ -30,6 +34,7 @@ export interface Interpretation {
   responsibilities: string[];
   transferable: { skill: string; evidence: string }[];
   improvements: string[];
+  vacancyItems?: VacancyItem[];
 }
 
 export interface JobMatchResult {
@@ -46,4 +51,6 @@ export interface JobMatchResult {
   transferable: Interpretation['transferable'];
   evidence: string[];
   improvements: string[];
+  vacancy: VacancyReport;
+  scoring: { required: number | null; preferred: number | null; experience: number | null };
 }

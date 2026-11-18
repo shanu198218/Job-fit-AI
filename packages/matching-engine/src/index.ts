@@ -1,33 +1,9 @@
 import type { CandidateProfile, Interpretation, JobDetails, JobMatchResult } from '../../shared-types/src/index.ts';
 import { assessEligibility } from '../../eligibility-engine/src/index.ts';
+import { buildVacancyReport, isSkillLabel, minimumGeneralExperience } from './vacancy.ts';
+import { extractSkills, normalizeSkill } from './skills.ts';
 
-const aliases: Record<string, string[]> = {
-  JavaScript: ['javascript', 'js', 'ecmascript'],
-  TypeScript: ['typescript', 'ts'],
-  React: ['react', 'react.js', 'reactjs'],
-  'Node.js': ['node.js', 'nodejs', 'node js'],
-  'Next.js': ['next.js', 'nextjs'],
-  PostgreSQL: ['postgresql', 'postgres'],
-  Python: ['python'], Java: ['java'], SQL: ['sql'], 'C++': ['c++'], 'C#': ['c#'],
-  '.NET': ['.net', 'dotnet'], AWS: ['aws', 'amazon web services'],
-  Azure: ['azure'], Git: ['git'], Docker: ['docker'], Kubernetes: ['kubernetes', 'k8s'],
-  HTML: ['html'], CSS: ['css'], Tailwind: ['tailwind', 'tailwind css'],
-  Go: ['golang', 'go language'], Rust: ['rust'], Vue: ['vue', 'vue.js'],
-  Angular: ['angular'], PHP: ['php'], Ruby: ['ruby'], MongoDB: ['mongodb'],
-  Linux: ['linux'], Terraform: ['terraform'], Figma: ['figma'], GraphQL: ['graphql'],
-};
-
-export function normalizeSkill(skill: string) {
-  const lower = skill.trim().toLowerCase();
-  return Object.entries(aliases).find(([, names]) => names.includes(lower))?.[0] ?? lower;
-}
-
-export function extractSkills(text: string) {
-  return Object.entries(aliases).filter(([, names]) => names.some(name => {
-    const escaped = name.replace(/[.*+?^$${}()|[\]\\]/g, '\\$&');
-    return new RegExp('(^|[^\\w])' + escaped + '(?![\\w])', 'i').test(text);
-  })).map(([skill]) => skill);
-}
+export { extractSkills, normalizeSkill } from './skills.ts';
 
 export function interpretLocally(job: JobDetails): Interpretation {
   const required = new Set<string>();
@@ -77,30 +53,60 @@ function educationMatch(requirement: string, evidence: string[]) {
 
 export function matchJob(profile: CandidateProfile, job: JobDetails, interpretation = interpretLocally(job)): JobMatchResult {
   const local = interpretLocally(job);
+  const eligibilityStatus = assessEligibility(profile, job, job.description);
+  const vacancy = buildVacancyReport(profile, job, eligibilityStatus, interpretation.vacancyItems);
   const skills = new Set(profile.skills.map(normalizeSkill));
-  const required = [...new Set(interpretation.required.map(normalizeSkill))];
-  const preferred = [...new Set(interpretation.preferred.map(normalizeSkill))].filter(skill => !required.includes(skill));
-  const requiredMatched = required.filter(skill => skills.has(skill));
-  const requiredMissing = required.filter(skill => !skills.has(skill));
-  const preferredMatched = preferred.filter(skill => skills.has(skill));
+  const matched = new Set(vacancy.requirements.filter(item => item.category === 'Technical' && item.status === 'Matched')
+    .map(item => normalizeSkill(item.text)));
+  const direct = (skill: string) => matched.has(skill) || (!profile.evidence.length && skills.has(skill));
+  const comparable = vacancy.requirements.filter(item => item.category === 'Technical' && isSkillLabel(item.text));
+  const required = [...new Set(comparable.filter(item => item.priority === 'Required').map(item => normalizeSkill(item.text)))];
+  const preferred = [...new Set(comparable.filter(item => item.priority === 'Preferred').map(item => normalizeSkill(item.text)))]
+    .filter(skill => !required.includes(skill));
+  const requiredMatched = required.filter(direct);
+  const requiredMissing = required.filter(skill => !direct(skill));
+  const preferredMatched = preferred.filter(direct);
+  const hasEvidence = skills.size > 0 || requiredMatched.length + preferredMatched.length > 0;
+  const requiredRate = required.length && hasEvidence ? requiredMatched.length / required.length : null;
+  const preferredRate = preferred.length && hasEvidence ? preferredMatched.length / preferred.length : null;
   const dimensions: { value: number; weight: number }[] = [];
-  if (required.length && skills.size) dimensions.push({ value: requiredMatched.length / required.length, weight: 60 });
-  if (preferred.length && skills.size) dimensions.push({ value: preferredMatched.length / preferred.length, weight: 15 });
+  if (requiredRate !== null) dimensions.push({ value: requiredRate, weight: 60 });
+  if (preferredRate !== null) dimensions.push({ value: preferredRate, weight: 15 });
   const average = () => dimensions.length
     ? Math.round(100 * dimensions.reduce((sum, item) => sum + item.value * item.weight, 0)
       / dimensions.reduce((sum, item) => sum + item.weight, 0)) : null;
   const technicalScore = average();
-  const experience = profile.experienceYears === null || interpretation.years === null ? null
-    : interpretation.years === 0 ? 1 : Math.min(1, profile.experienceYears / interpretation.years);
+  const minimumYears = minimumGeneralExperience(vacancy.requirements);
+  const experience = profile.experienceYears === null || minimumYears === null ? null
+    : minimumYears === 0 ? 1 : Math.min(1, profile.experienceYears / minimumYears);
   if (experience !== null) dimensions.push({ value: experience, weight: 25 });
-  const eligibilityStatus = assessEligibility(profile, job, local.restrictions);
+  const qualifications = vacancy.requirements.filter(item => item.category === 'Education'
+    && item.priority === 'Required' && item.status !== 'Unknown');
+  if (qualifications.length) dimensions.push({
+    value: qualifications.reduce((sum, item) => sum + (item.status === 'Matched' ? 1 : item.status === 'Partially Matched' ? 0.5 : 0), 0)
+      / qualifications.length,
+    weight: 20,
+  });
+  const overallScore = average();
+  const critical = vacancy.requirements.find(item => item.priority === 'Required'
+    && item.category !== 'Responsibilities' && item.status !== 'Matched');
   const educationEvidence = profile.evidence.filter(line => /\b(degree|bachelor|master|phd|diploma|bsc|msc)\b/i.test(line));
   return {
-    overallScore: average(), technicalScore, experienceScore: experience === null ? null : Math.round(100 * experience),
+    overallScore, technicalScore, experienceScore: experience === null ? null : Math.round(100 * experience),
+    vacancy,
+    scoring: {
+      required: requiredRate === null ? null : Math.round(100 * requiredRate),
+      preferred: preferredRate === null ? null : Math.round(100 * preferredRate),
+      experience: experience === null ? null : Math.round(100 * experience),
+    },
     eligibilityStatus,
-    recommendation: eligibilityStatus === 'NOT_ELIGIBLE' ? 'The vacancy explicitly restricts your location.'
-      : 'Review the cited requirements and confirm any unresolved work authorization or location conditions.',
-    requiredMatched, requiredMissing: skills.size ? requiredMissing : [], preferredMatched,
+    recommendation: eligibilityStatus === 'NOT_ELIGIBLE' ? 'A stated hiring condition conflicts with your residence or recorded work authorization. The match scores do not affect this restriction.'
+      : (eligibilityStatus !== 'ELIGIBLE' ? 'Confirm the hiring conditions above before applying.'
+        : overallScore !== null && overallScore >= 70 && (technicalScore === null || technicalScore >= 60) && !critical
+          ? 'This vacancy looks worth considering based on the evidence available.'
+          : 'Review the qualifications before deciding whether to apply.')
+        + (critical ? ' Check your evidence for the outstanding required qualifications.' : overallScore === null ? ' There is too little CV evidence to judge the match.' : ''),
+    requiredMatched, requiredMissing: hasEvidence ? requiredMissing : [], preferredMatched,
     education: educationMatch(interpretation.education, educationEvidence),
     responsibilities: interpretation.responsibilities,
     transferable: interpretation.transferable.filter(item => profile.evidence.some(line => line.includes(item.evidence))),

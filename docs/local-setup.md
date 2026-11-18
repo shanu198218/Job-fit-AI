@@ -2,7 +2,7 @@
 
 ## Install and load the extension
 
-Run from the repository root in PowerShell. Use Node.js 22.13 or later in the Node 22 line, or a newer supported release. Use the `.cmd` shims if PowerShell blocks npm or pnpm scripts.
+Run from the repository root in PowerShell. Use Node.js 22.15 or later in the Node 22 line, or a newer supported release. The local API scripts use the Windows trusted certificate store for Gemini HTTPS requests. Use the `.cmd` shims if PowerShell blocks npm or pnpm scripts.
 
 ```powershell
 node --version
@@ -37,19 +37,20 @@ To rotate the pairing token, stop the backend with Ctrl+C, run `pnpm.cmd pair --
 | --- | --- |
 | `GET /health` | Loopback readiness. |
 | `POST /analyze` | Validate consent, candidate profile, and vacancy, then return the scored report. |
+| `POST /cover-letter` | Validate separate consent and request a draft from Gemini using job requirements and selected CV excerpts. |
 | `GET /settings/ai/status` | Check whether a key is saved. |
 | `PUT /settings/ai/key` | Save or replace the key. |
 | `POST /settings/ai/test` | Check the key and model together using a generic prompt. |
 | `DELETE /settings/ai/key` | Remove the key. |
 
-Every route except health requires the pairing bearer token. Analysis and key updates accept JSON. Errors contain a short code that the popup translates into a status or message.
+Every route except health requires the pairing bearer token. Analysis, cover letters, and key updates accept JSON. Errors contain a short code that the popup translates into a status or message.
 
 ## Configure Gemini and analyze
 
 1. Create a Gemini Developer API key in [Google AI Studio](https://aistudio.google.com/app/apikey).
 2. Open **AI Settings**, enter the key, and select **Save or replace key**. Select **Test connection**. The saved key is never displayed.
-3. Upload a PDF or DOCX in the popup. In **Candidate details**, review recognized skills and enter your country, work authorization countries, and relevant years if known.
-4. Open the vacancy, click JobFit AI on the toolbar, then choose **Analyze Current Job**. For unsupported pages, paste the text in the manual input.
+3. Upload a PDF or DOCX in **CV Profile**. In **Candidate details**, review recognized skills and enter your country, work authorization countries, and relevant years if known.
+4. Open the vacancy, click JobFit AI on the toolbar, and select **Job Analysis** → **Analyze Current Job**. For unsupported pages, paste the text in the manual input.
 5. To use Gemini, check the consent box before analyzing. The report displays the analysis mode. You can analyze another vacancy in the same Chrome session using the existing profile.
 6. To replace a revoked or invalid key, enter a new one in Settings and test again. **Remove key** deletes the saved credential. With Gemini unavailable, analysis falls back to local scoring.
 
@@ -57,7 +58,16 @@ Every route except health requires the pairing bearer token. Analysis and key up
 
 The CV file is read in the extension. Chrome keeps selected profile fields and pairing in trusted `chrome.storage.session`. Clear CV removes the current profile and report. Reports stay in the popup state. Closing the popup discards the report, and restarting Chrome or reloading the extension clears the session profile and pairing.
 
-After consent, the backend sends Gemini the vacancy text, title, location, work mode, and employment type, plus recognized skills, years, and selected CV evidence. Review the vacancy before sharing it. The CV extractor filters common contact details, and free-form evidence may still contain identifying information. The backend keeps candidate residence and authorization countries local for deterministic eligibility. Browser session cleanup has no effect on data already transmitted to Google. Review [Gemini API terms and data handling](https://ai.google.dev/gemini-api/terms), particularly when using the free tier.
+After consent, the backend sends Gemini the vacancy text, title, location, work mode, and employment type. The CV, comparison, and eligibility evaluation stay on your device. Review the vacancy before sharing it. Google handles the transmitted vacancy data according to the [Gemini API terms and data handling](https://ai.google.dev/gemini-api/terms).
+
+In **Results**, check eligibility first, then review the scores, job conditions, and key qualifications. **Show More** expands the remaining qualifications.
+
+- **Technical Skills Match** averages direct match rates for comparable required and preferred technical skills with relative weights of 60 and 15. Required skills take precedence when a skill appears in both groups.
+- **Overall CV Match** uses the same skill rates and adds general experience at weight 25 and required education or certifications at weight 20. Experience credit is recorded years divided by the stated minimum, capped at full credit. An evidenced qualification earns full credit, a partial match earns half, and a qualification with no supporting evidence earns zero.
+
+Each score divides by the sum of available weights and rounds to the nearest percentage. When all dimensions are unavailable, the score displays **Unknown**. The eligibility engine evaluates residence and work authorization independently. Local extraction uses wording and section patterns, and Gemini-assisted extraction can still miss or misclassify items.
+
+Under **Cover letter**, grant consent and select **Generate Cover Letter**. Gemini receives the job title, employer, selected requirements, and matching extracted CV excerpts. Edit the draft in the popup, then copy or regenerate it. The draft clears when the popup closes. The local backend and Gemini connection must be available for generation.
 
 Pairing and Gemini credentials are stored as DPAPI-encrypted blobs under `%LOCALAPPDATA%\JobFitAI\credentials`. The backend retrieves the key on demand and keeps no long-lived plaintext key cache. DPAPI protects the files under the Windows user profile. Software running as that user may be able to recover the credentials. The API is designed for personal use on Windows loopback. Its browser origin check supplements bearer-token authorization.
 
@@ -80,7 +90,7 @@ pnpm.cmd exec playwright install chromium --no-shell
 pnpm.cmd test:browser
 ```
 
-Run the DPAPI test from a normal Windows session with your user profile loaded. The browser suite uses an isolated profile and a mock localhost API on port 8787, so stop the real backend before running it. To use an existing Chrome for Testing binary, set `$env:JOBFIT_TEST_CHROME` to its executable path before running the browser test. Use a Chromium build that supports the `Extensions.triggerAction` DevTools command. Automated tests use synthetic data and make no live Gemini requests.
+Run the DPAPI test from a normal Windows session with your user profile loaded. The browser suite uses an isolated profile and routes the extension's requests to a mock localhost API on a temporary port. To use an existing Chrome for Testing binary, set `$env:JOBFIT_TEST_CHROME` to its executable path before running the browser test. Use a Chromium build that supports the `Extensions.triggerAction` DevTools command. Automated tests use synthetic data and make no live Gemini requests.
 
 For manual acceptance, pair, save a real key, test Gemini, and analyze a vacancy with consent. Analyze a second vacancy without re-uploading. Close and reopen the popup to check the profile, then exit Chrome completely and reopen it to check that the profile is cleared. Restart Windows, start the backend with the same user and extension ID, and pair again. Confirm that Settings still shows **Configured**. Replace the key, test it, then remove it or stop the backend and confirm that analysis falls back to **Local Basic Analysis**.
 
@@ -91,6 +101,7 @@ For manual acceptance, pair, save a real key, test Gemini, and analyze a vacancy
 | Backend Offline | Run the local API and check `Invoke-RestMethod http://127.0.0.1:8787/health`. Check whether another process is using port 8787. |
 | Unpaired | Confirm the extension ID for the current build/profile, restart the backend if it changed, and paste a fresh copy of the token. |
 | Windows credential storage unavailable | Run under the original interactive Windows user profile. A restricted process or a different Windows profile may be unable to decrypt saved credentials. |
-| Invalid Key or Quota Exceeded | Replace a revoked or mistyped key. Check project limits in AI Studio and try later for quota errors. |
+| Gemini rejected the saved API key or reached quota | Replace a revoked or mistyped key. Check project limits in AI Studio and try later for quota errors. |
+| Gemini TLS, DNS, timeout, or request rejection | Check the local API terminal. Failure logs show the operation, HTTP status when available, recognized transport cause codes, and timing. Analysis logs also show the vacancy input size in bytes. They omit credentials, request text, and raw provider errors. |
 | Unable to read this vacancy | Click the toolbar extension from the vacancy tab. Use manual input on restricted pages or when the vacancy content has yet to load. |
 | PDF or DOCX has no readable text | Try a text-based export. The extension accepts files up to 8 MB and PDFs up to 30 pages. |

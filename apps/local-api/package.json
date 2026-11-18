@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --experimental-strip-types --watch src/server.ts",
+    "dev": "node --use-system-ca --experimental-strip-types --watch src/server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "pair": "node --experimental-strip-types src/pair.ts",
-    "start": "node dist/apps/local-api/src/server.js"
+    "start": "node --use-system-ca dist/apps/local-api/src/server.js"
   },
   "dependencies": {
     "@google/genai": "^3.2.0",

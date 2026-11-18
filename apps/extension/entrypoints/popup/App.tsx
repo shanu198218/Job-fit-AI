@@ -1,14 +1,15 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { z } from 'zod';
 import { reportSchema } from '../../../../packages/shared-types/src/report.ts';
-import type { CandidateProfile, JobDetails, JobMatchResult } from '@jobfit/shared-types';
+import type { CandidateProfile, JobDetails } from '@jobfit/shared-types';
 import { matchJob } from '../../../../packages/matching-engine/src/index.ts';
 import { api } from '../../lib/api';
 import { parseCv } from '../../lib/cv';
 import { manualJob, readJob } from '../../lib/job';
 import { clearProfile, loadProfile, savePairing, saveProfile } from '../../lib/session';
+import { MatchReport, type Report } from './MatchReport';
 
-interface Report { job: JobDetails; result: JobMatchResult; mode: string }
+const pages = ['Job Analysis', 'CV Profile', 'Results', 'AI Settings'] as const;
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : 'The operation failed.';
@@ -16,7 +17,7 @@ function message(error: unknown) {
 
 export default function App() {
   const [profile, setProfile] = useState<CandidateProfile>();
-  const [settings, setSettings] = useState(false);
+  const [page, setPage] = useState<(typeof pages)[number]>('Job Analysis');
   const [token, setToken] = useState('');
   const [key, setKey] = useState('');
   const [backend, setBackend] = useState('Checking');
@@ -24,9 +25,16 @@ export default function App() {
   const [ai, setAi] = useState('Checking');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [feedback, setFeedback] = useState('');
   const [consent, setConsent] = useState(false);
   const [manual, setManual] = useState('');
   const [report, setReport] = useState<Report>();
+  const [letter, setLetter] = useState('');
+  const content = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (content.current) content.current.scrollTop = 0;
+  }, [page]);
 
   async function refresh() {
     try {
@@ -49,13 +57,17 @@ export default function App() {
   }
 
   useEffect(() => {
-    void loadProfile().then(setProfile).catch(() => setError('Unable to open the CV session.'));
+    void loadProfile().then(saved => {
+      setProfile(saved);
+      if (!saved) setPage(current => current === 'Job Analysis' ? 'CV Profile' : current);
+    }).catch(() => setError('Unable to open the CV session.'));
     void refresh();
   }, []);
 
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
     setError('');
+    setFeedback('');
     try { await action(); } catch (error) { setError(message(error)); }
     finally { setBusy(''); }
   }
@@ -65,6 +77,7 @@ export default function App() {
     const candidate = profile;
     await run('Analyzing vacancy…', async () => {
       setReport(undefined);
+      setLetter('');
       let job: JobDetails;
       if (source === 'manual') job = manualJob(manual);
       else {
@@ -81,14 +94,16 @@ export default function App() {
           const result = await api('/analyze', { method: 'POST', body: { profile: candidate, job, consent: true }, schema: reportSchema });
           if (!result) throw new Error('Local API returned an empty report.');
           setAi('Connected');
-          setReport({ job, result, mode: 'Gemini-Assisted Analysis' });
+          setReport({ job, result, mode: 'Gemini-Assisted Analysis', candidate });
+          setPage('Results');
           return;
         } catch (error) {
           setAi(message(error));
           setError(message(error) + ' Showing local analysis.');
         }
       }
-      setReport({ job, result: matchJob(candidate, job), mode: 'Local Basic Analysis' });
+      setReport({ job, result: matchJob(candidate, job), mode: 'Local Basic Analysis', candidate });
+      setPage('Results');
     });
   }
 
@@ -99,23 +114,27 @@ export default function App() {
     const years = String(data.get('years') ?? '');
     const updated = { ...profile, country: String(data.get('country') ?? '').trim(),
       authorizedCountries: String(data.get('authorization') ?? '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 10),
-      experienceYears: years ? Number(years) : null };
-    void run('Saving CV details…', async () => { await saveProfile(updated); setProfile(updated); setReport(undefined); });
+      experienceYears: years ? Number(years) : null,
+      experienceSource: years ? Number(years) !== profile.experienceYears ? 'Self-reported' as const : profile.experienceSource : undefined };
+    void run('Saving CV details…', async () => {
+      await saveProfile(updated); setProfile(updated); setReport(undefined); setLetter(''); setFeedback('Candidate details saved.');
+    });
   }
 
   return (
-    <main>
-      <header>
-        <h1>JobFit AI</h1>
-        <button type="button" disabled={!!busy} onClick={() => { setSettings(!settings); setError(''); setKey(''); setToken(''); }}>
-          {settings ? 'Back to analysis' : 'AI Settings'}
-        </button>
-      </header>
-      <div className="status" aria-live="polite"><span>Backend {backend}</span><span>Gemini · {ai}</span></div>
+    <div className="popup">
+      <header><h1><span className="brand" aria-hidden="true">J</span> JobFit AI</h1></header>
+      <nav aria-label="JobFit sections">
+        {pages.map(item => <button key={item} type="button" aria-current={item === page ? 'page' : undefined} disabled={!!busy}
+          onClick={() => { setPage(item); setError(''); setFeedback(''); setKey(''); setToken(''); }}>{item}</button>)}
+      </nav>
+      <main ref={content} className="popup-content" aria-label={page} tabIndex={0}>
       {busy && <p role="status">{busy}</p>}
+      {feedback && <p className="feedback" role="status">{feedback}</p>}
       {error && <p className="notice" role="alert">{error}</p>}
-      {settings ? (
+      {page === 'AI Settings' && (
         <>
+          <div className="status" aria-live="polite"><span>Backend {backend}</span><span>Gemini · {ai}</span></div>
           <section>
             <h2>Local pairing</h2>
             <button disabled={!!busy} onClick={() => void run('Checking backend…', refresh)}>Refresh status</button>
@@ -135,7 +154,9 @@ export default function App() {
               event.preventDefault();
               const submitted = key;
               setKey('');
-              void run('Saving key…', async () => { await api('/settings/ai/key', { method: 'PUT', body: { key: submitted } }); await refresh(); });
+              void run('Saving key…', async () => {
+                await api('/settings/ai/key', { method: 'PUT', body: { key: submitted } }); await refresh(); setFeedback('Gemini key saved.');
+              });
             }}>
               <label htmlFor="gemini-key">New API key</label>
               <input id="gemini-key" type="password" autoComplete="off" value={key} onChange={event => setKey(event.target.value)} required />
@@ -147,14 +168,14 @@ export default function App() {
                 catch (error) { setAi(message(error)); throw error; }
               })}>Test connection</button>
               <button disabled={!!busy || pairing !== 'Paired'} onClick={() => void run('Removing key…', async () => {
-                await api('/settings/ai/key', { method: 'DELETE' }); await refresh();
+                await api('/settings/ai/key', { method: 'DELETE' }); await refresh(); setFeedback('Gemini key removed.');
               })}>Remove key</button>
             </div>
           </section>
           <section><h2>Privacy</h2><p>The original CV stays on your device. The extracted profile and pairing token expire with the Chrome extension session. Windows protects the saved API key under your user account. Google’s retention policies apply to information sent to Gemini.</p></section>
         </>
-      ) : (
-        <>
+      )}
+      {page === 'CV Profile' && (
           <section>
             <h2>Candidate profile</h2>
             <label htmlFor="cv">Upload CV</label>
@@ -163,18 +184,18 @@ export default function App() {
               event.currentTarget.value = '';
               if (file) void run('Reading CV locally…', async () => {
                 const extracted = await parseCv(file);
-                await saveProfile(extracted); setProfile(extracted); setReport(undefined);
+                await saveProfile(extracted); setProfile(extracted); setReport(undefined); setLetter('');
               });
             }} />
             <p role="status">{profile ? 'CV ready · ' + profile.skills.length + ' recognized skills' : 'PDF or DOCX · up to 8 MB'}</p>
             {profile && <>
-              <details>
+              <details open>
                 <summary>Candidate details</summary>
                 <p>{profile.skills.join(', ') || 'No catalog skills recognized.'}</p>
-                <ReportList title="CV evidence" entries={profile.evidence} />
+                {profile.evidence.length > 0 && <details><summary>CV evidence</summary><ul>{profile.evidence.map((entry, i) => <li key={i}>{entry}</li>)}</ul></details>}
                 <form key={JSON.stringify([profile.country, profile.authorizedCountries, profile.experienceYears])} onSubmit={profileDetails}>
                   <label htmlFor="country">Country of residence</label>
-                  <input id="country" name="country" maxLength={100} defaultValue={profile.country} />
+                    <input id="country" name="country" placeholder="e.g. Sri Lanka" maxLength={100} defaultValue={profile.country} />
                   <label htmlFor="authorization">Countries where you can work (comma-separated)</label>
                   <input id="authorization" name="authorization" maxLength={200} defaultValue={profile.authorizedCountries.join(', ')} />
                   <label htmlFor="years">Relevant years of experience</label>
@@ -182,60 +203,34 @@ export default function App() {
                   <button disabled={!!busy}>Save details</button>
                 </form>
               </details>
+              <button className="primary" disabled={!!busy} onClick={() => setPage('Job Analysis')}>Continue to Job Analysis</button>
               <button disabled={!!busy} onClick={() => void run('Clearing CV…', async () => {
-                await clearProfile(); setProfile(undefined); setReport(undefined);
+                await clearProfile(); setProfile(undefined); setReport(undefined); setLetter(''); setFeedback('CV cleared from this session.');
               })}>Clear CV</button>
             </>}
           </section>
+      )}
+      {page === 'Job Analysis' && (
           <section>
             <h2>Analyze a vacancy</h2>
+            {!profile && <p>Upload a CV in <button onClick={() => setPage('CV Profile')}>CV Profile</button> to start.</p>}
             <label className="consent">
               <input type="checkbox" checked={consent} disabled={!!busy} onChange={event => setConsent(event.target.checked)} />
-              <span>Allow Gemini to receive selected CV evidence and vacancy text. Google’s retention and data-use policies apply after transmission.</span>
+              <span>Allow Gemini to receive vacancy text for extraction. CV comparison runs on this device. Google’s retention and data-use policies apply to the vacancy text.</span>
             </label>
             <button className="primary" disabled={!profile || !!busy} onClick={() => void analyze('tab')}>Analyze Current Job</button>
             <details>
               <summary>Enter job description manually</summary>
               <label htmlFor="job">Job description</label>
-              <textarea id="job" value={manual} maxLength={30_000} rows={5} onChange={event => setManual(event.target.value)} />
+              <textarea id="job" value={manual} maxLength={30_000} rows={5} disabled={!!busy} onChange={event => setManual(event.target.value)} />
               <button disabled={!profile || !manual.trim() || !!busy} onClick={() => void analyze('manual')}>Analyze pasted job</button>
             </details>
           </section>
-          {report && <MatchReport report={report} />}
-        </>
       )}
-    </main>
+      {page === 'Results' && (report ? <MatchReport report={report} letter={letter} setLetter={setLetter} />
+        : <section><h2>Results</h2><p>Analyze a vacancy to see your score, requirement coverage, and eligibility.</p>
+          <button className="primary" onClick={() => setPage('Job Analysis')}>Go to Job Analysis</button></section>)}
+      </main>
+    </div>
   );
-}
-
-function MatchReport({ report: { job, result, mode } }: { report: Report }) {
-  const percent = (score: number | null) => score === null ? 'Unknown' : score + '%';
-  return (
-    <section aria-label="Match report">
-      <h2>{job.title || 'Match report'}</h2>
-      <p>{[job.company, job.location, job.workMode, job.employmentType].filter(Boolean).join(' · ')}</p>
-      <p className="mode">{mode}</p>
-      <dl>
-        <div><dt>Overall</dt><dd>{percent(result.overallScore)}</dd></div>
-        <div><dt>Skills</dt><dd>{percent(result.technicalScore)}</dd></div>
-        <div><dt>Experience</dt><dd>{percent(result.experienceScore)}</dd></div>
-      </dl>
-      <h3>Eligibility</h3>
-      <p>{result.eligibilityStatus.replaceAll('_', ' ')}</p>
-      <p>{result.recommendation}</p>
-      <h3>Requirements</h3>
-      <p>Required matched · {result.requiredMatched.join(', ') || 'None identified'}</p>
-      <p>Required gaps · {result.requiredMissing.join(', ') || 'None identified'}</p>
-      <p>Preferred matched · {result.preferredMatched.join(', ') || 'None identified'}</p>
-      <p>Education · {result.education}</p>
-      <ReportList title="Responsibilities" entries={result.responsibilities} />
-      <ReportList title="Transferable skills" entries={result.transferable.map(item => item.skill + ' · ' + item.evidence)} />
-      <ReportList title="Supporting evidence" entries={result.evidence} />
-      <ReportList title="Suggested CV improvements" entries={result.improvements} />
-    </section>
-  );
-}
-
-function ReportList({ title, entries }: { title: string; entries: string[] }) {
-  return entries.length ? <><h3>{title}</h3><ul>{entries.map((entry, i) => <li key={i}>{entry}</li>)}</ul></> : null;
 }

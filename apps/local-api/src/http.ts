@@ -4,7 +4,7 @@ import { matchJob } from '../../../packages/matching-engine/src/index.ts';
 import { reportSchema } from '../../../packages/shared-types/src/report.ts';
 import type { Credentials } from './credentials.ts';
 import { ApiError, type Gemini } from './gemini.ts';
-import { analyzeInput, keyInput } from './validation.ts';
+import { analyzeInput, coverLetterInput, keyInput } from './validation.ts';
 
 const maxBody = 160_000;
 
@@ -72,7 +72,7 @@ export function localServer(options: { credentials: Credentials; ai: Gemini; tok
       if (!validToken(req.headers.authorization, token)) throw new ApiError('UNAUTHORIZED', 401);
       if (Date.now() - windowStart >= 60_000) { windowStart = Date.now(); attempts = 0; }
       if (++attempts > 40) throw new ApiError('LOCAL_RATE_LIMIT', 429);
-      if (!['POST /analyze', 'PUT /settings/ai/key'].includes(route)
+      if (!['POST /analyze', 'POST /cover-letter', 'PUT /settings/ai/key'].includes(route)
         && (Number(req.headers['content-length']) > 0 || req.headers['transfer-encoding'])) {
         throw new ApiError('INVALID_INPUT', 400);
       }
@@ -102,6 +102,14 @@ export function localServer(options: { credentials: Credentials; ai: Gemini; tok
             const report = reportSchema.safeParse(matchJob(profile, job, interpretation));
             if (!report.success) throw new ApiError('AI_RESPONSE_INVALID', 502);
             return send(res, 200, report.data);
+          }
+          case 'POST /cover-letter': {
+            const input = coverLetterInput.safeParse(await json(req));
+            if (!input.success) throw new ApiError('INVALID_INPUT', 400);
+            const { title, company, requirements, evidence } = input.data;
+            const letter = (await ai.coverLetter(await key(), { title, company, requirements, evidence })).trim();
+            if (!letter || letter.length > 4500) throw new ApiError('AI_RESPONSE_INVALID', 502);
+            return send(res, 200, { letter });
           }
           default: throw new ApiError('NOT_FOUND', 404);
         }

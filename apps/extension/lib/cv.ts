@@ -63,10 +63,11 @@ function validateArchive(bytes: Uint8Array) {
 export function extractProfile(input: string): CandidateProfile {
   const lines = input.slice(0, 80_000).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const evidence = lines.filter(line => !/@|https?:|\b(?:address|phone|email|references|avenue|postal code)\b|(?:\d[\s().+-]*){7,}/i.test(line))
-    .filter(line => /\b(?:certification|certified|degree|bachelor|master|university|diploma|experience|engineer|developer|designed|built|implemented|project|worked|managed|analyst)\b/i.test(line)
+    .filter(line => /\b(?:skills|technologies|tools|stack|languages|fluent|certification|certified|degree|bachelor|master|university|diploma|experience|engineer|developer|designed|built|implemented|project|worked|managed|analyst|maintained|led|delivered|collaborated|tested)\b/i.test(line)
       || extractSkills(line).length > 0)
     .slice(0, 32).map(line => line.slice(0, 260));
   const claim = evidence.join('\n').match(/\b(\d{1,2})\s*\+?\s+years?\s+(?:of\s+)?(?:professional\s+|commercial\s+|relevant\s+)?experience\b/i);
-  return { country: '', authorizedCountries: [], experienceYears: claim ? Number(claim[1]) : null, skills: extractSkills(evidence.join('\n')), evidence };
+  return { country: '', authorizedCountries: [], experienceYears: claim ? Number(claim[1]) : null, skills: extractSkills(evidence.join('\n')), evidence,
+    ...(claim ? { experienceSource: 'CV' as const } : {}) };
 }
 
